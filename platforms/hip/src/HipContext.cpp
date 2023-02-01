@@ -633,7 +633,7 @@ hipModule_t HipContext::createModule(const string source, const map<string, stri
         ofstream out(inputFile.c_str());
         out << src.str();
         out.close();
-        string command = compiler + " --genco --amdgpu-target=" + gpuArchitecture + " " + options + (saveTemps ? " -save-temps=obj" : "") +" -o \""+outputFile+"\" " + " \""+inputFile+"\" 2> \""+logFile+"\"";
+        string command = compiler + " --genco --offload-arch=" + gpuArchitecture + " " + options + (saveTemps ? " -save-temps=obj" : "") +" -o \""+outputFile+"\" " + " \""+inputFile+"\" 2> \""+logFile+"\"";
         res = std::system(command.c_str());
     }
     try {
