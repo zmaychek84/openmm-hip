@@ -387,6 +387,8 @@ void HipNonbondedUtilities::initialize(const System& system) {
         findInteractingBlocksArgs.push_back(&exclusionRowIndices.getDevicePointer());
         findInteractingBlocksArgs.push_back(&oldPositions.getDevicePointer());
         findInteractingBlocksArgs.push_back(&rebuildNeighborList.getDevicePointer());
+        copyInteractionCountsArgs.push_back(&interactionCount.getDevicePointer());
+        copyInteractionCountsArgs.push_back(&pinnedCountBuffer);
     }
 }
 
@@ -430,7 +432,7 @@ void HipNonbondedUtilities::prepareInteractions(int forceGroups) {
     context.executeKernelFlat(kernels.findInteractingBlocksKernel, &findInteractingBlocksArgs[0], context.getNumAtomBlocks() * context.getSIMDWidth() * numTilesInBatch, findInteractingBlocksThreadBlockSize);
     forceRebuildNeighborList = false;
     lastCutoff = kernels.cutoffDistance;
-    interactionCount.download(pinnedCountBuffer, false);
+    context.executeKernelFlat(kernels.copyInteractionCountsKernel, &copyInteractionCountsArgs[0], 1, 1);
     hipEventRecord(downloadCountEvent, context.getCurrentStream());
 }
 
@@ -565,6 +567,7 @@ void HipNonbondedUtilities::createKernelsForGroups(int groups) {
         kernels.findBlockBoundsKernel = context.getKernel(interactingBlocksProgram, "findBlockBounds");
         kernels.sortBoxDataKernel = context.getKernel(interactingBlocksProgram, "sortBoxData");
         kernels.findInteractingBlocksKernel = context.getKernel(interactingBlocksProgram, "findBlocksWithInteractions");
+        kernels.copyInteractionCountsKernel = context.getKernel(interactingBlocksProgram, "copyInteractionCounts");
     }
     groupKernels[groups] = kernels;
 }
