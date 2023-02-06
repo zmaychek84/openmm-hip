@@ -271,13 +271,14 @@ double HipParallelCalcForcesAndEnergyKernel::finishComputation(ContextImpl& cont
 
         if (cu.getComputeForceCount() < 200) {
             int firstIndex = 0, lastIndex = 0;
+            const double eps = 0.001;
             for (int i = 0; i < (int) completionTimes.size(); i++) {
                 if (completionTimes[i] < completionTimes[firstIndex])
                     firstIndex = i;
-                if (completionTimes[i] > completionTimes[lastIndex])
+                if (contextNonbondedFractions[lastIndex] < eps || completionTimes[i] > completionTimes[lastIndex])
                     lastIndex = i;
             }
-            double fractionToTransfer = min(0.01, contextNonbondedFractions[lastIndex]);
+            double fractionToTransfer = min(cu.getComputeForceCount() < 100 ? 0.01 : 0.001, contextNonbondedFractions[lastIndex]);
             contextNonbondedFractions[firstIndex] += fractionToTransfer;
             contextNonbondedFractions[lastIndex] -= fractionToTransfer;
             double startFraction = 0.0;
