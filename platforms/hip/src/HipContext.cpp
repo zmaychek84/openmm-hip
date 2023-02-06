@@ -7,7 +7,7 @@
  * Medical Research, grant U54 GM072970. See https://simtk.org.               *
  *                                                                            *
  * Portions copyright (c) 2009-2019 Stanford University and the Authors.      *
- * Portions copyright (C) 2020 Advanced Micro Devices, Inc. All Rights        *
+ * Portions copyright (C) 2020-2023 Advanced Micro Devices, Inc. All Rights   *
  * Reserved.                                                                  *
  * Authors: Peter Eastman, Nicholas Curtis                                    *
  * Contributors:                                                              *
@@ -81,7 +81,7 @@ bool HipContext::hasInitializedHip = false;
 
 HipContext::HipContext(const System& system, int deviceIndex, bool useBlockingSync, const string& precision, const string& compiler,
         const string& tempDir, const std::string& hostCompiler, bool allowRuntimeCompiler, HipPlatform::PlatformData& platformData,
-        HipContext* originalContext) : ComputeContext(system), currentStream(0), platformData(platformData), contextIsValid(false), hasAssignedPosqCharges(false),
+        HipContext* originalContext) : ComputeContext(system), currentStream(0), defaultStream(0), platformData(platformData), contextIsValid(false), hasAssignedPosqCharges(false),
         hasCompilerKernel(false), isHipccAvailable(false), pinnedBuffer(NULL), integration(NULL), expression(NULL), bonded(NULL), nonbonded(NULL),
         useBlockingSync(useBlockingSync), fftBackend(0), supportsHardwareFloatGlobalAtomicAdd(false) {
     // Determine what compiler to use.
@@ -155,12 +155,15 @@ HipContext::HipContext(const System& system, int deviceIndex, bool useBlockingSy
             else
                 throw OpenMMException("No compatible HIP device is available");
         }
+        CHECK_RESULT(hipStreamCreateWithFlags(&defaultStream, hipStreamNonBlocking));
     }
     else {
         isLinkedContext = true;
         this->deviceIndex = originalContext->deviceIndex;
         this->device = originalContext->device;
+        defaultStream = originalContext->defaultStream;
     }
+    currentStream = defaultStream;
 
     hipDeviceProp_t props;
     CHECK_RESULT(hipGetDeviceProperties(&props, device));
@@ -377,6 +380,8 @@ HipContext::~HipContext() {
     for (auto module : loadedModules) {
         hipModuleUnload(module);
     }
+    if (!isLinkedContext)
+        hipStreamDestroy(defaultStream);
     popAsCurrent();
     contextIsValid = false;
 }
@@ -689,7 +694,7 @@ void HipContext::setCurrentStream(hipStream_t stream) {
 }
 
 void HipContext::restoreDefaultStream() {
-    setCurrentStream(0);
+    currentStream = defaultStream;
 }
 
 HipArray* HipContext::createArray() {
