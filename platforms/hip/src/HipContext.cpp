@@ -394,19 +394,19 @@ void HipContext::initialize() {
         energyBuffer.initialize<double>(*this, numEnergyBuffers, "energyBuffer");
         energySum.initialize<double>(*this, 1, "energySum");
         int pinnedBufferSize = max(paddedNumAtoms*4, numEnergyBuffers);
-        CHECK_RESULT(hipHostMalloc(&pinnedBuffer, pinnedBufferSize*sizeof(double), 0));
+        CHECK_RESULT(hipHostMalloc(&pinnedBuffer, pinnedBufferSize*sizeof(double), hipHostMallocNumaUser));
     }
     else if (useMixedPrecision) {
         energyBuffer.initialize<double>(*this, numEnergyBuffers, "energyBuffer");
         energySum.initialize<double>(*this, 1, "energySum");
         int pinnedBufferSize = max(paddedNumAtoms*4, numEnergyBuffers);
-        CHECK_RESULT(hipHostMalloc(&pinnedBuffer, pinnedBufferSize*sizeof(double), 0));
+        CHECK_RESULT(hipHostMalloc(&pinnedBuffer, pinnedBufferSize*sizeof(double), hipHostMallocNumaUser));
     }
     else {
         energyBuffer.initialize<float>(*this, numEnergyBuffers, "energyBuffer");
         energySum.initialize<float>(*this, 1, "energySum");
         int pinnedBufferSize = max(paddedNumAtoms*6, numEnergyBuffers);
-        CHECK_RESULT(hipHostMalloc(&pinnedBuffer, pinnedBufferSize*sizeof(float), 0));
+        CHECK_RESULT(hipHostMalloc(&pinnedBuffer, pinnedBufferSize*sizeof(float), hipHostMallocNumaUser));
     }
     for (int i = 0; i < numAtoms; i++) {
         double mass = system.getParticleMass(i);

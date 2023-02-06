@@ -122,7 +122,6 @@ public:
                 if (cu.getPlatformData().peerAccessSupported) {
                     int numBytes = numAtoms*3*sizeof(long long);
                     int offset = (cu.getContextIndex()-1)*numBytes;
-                    HipContext& context0 = *cu.getPlatformData().contexts[0];
                     CHECK_RESULT(hipMemcpyAsync(static_cast<char*>(contextForces.getDevicePointer())+offset,
                                            cu.getForce().getDevicePointer(), numBytes, hipMemcpyDeviceToDevice, stream), "Error copying forces");
                     hipEventRecord(event, stream);
@@ -193,15 +192,13 @@ void HipParallelCalcForcesAndEnergyKernel::initialize(const System& system) {
     peerCopyEventLocal.resize(numContexts);
     peerCopyStream.resize(numContexts);
     for (int i = 0; i < numContexts; i++) {
-        CHECK_RESULT(hipEventCreateWithFlags(&peerCopyEvent[i], cu.getEventFlags()), "Error creating event");
-        CHECK_RESULT(hipStreamCreateWithFlags(&peerCopyStream[i], hipStreamNonBlocking), "Error creating stream");
-    }
-    for (int i = 0; i < numContexts; i++) {
         HipContext& cuLocal = *data.contexts[i];
         ContextSelector selectorLocal(cuLocal);
+        CHECK_RESULT(hipEventCreateWithFlags(&peerCopyEvent[i], cu.getEventFlags()), "Error creating event");
+        CHECK_RESULT(hipStreamCreateWithFlags(&peerCopyStream[i], hipStreamNonBlocking), "Error creating stream");
         CHECK_RESULT(hipEventCreateWithFlags(&peerCopyEventLocal[i], cu.getEventFlags()), "Error creating event");
     }
-    CHECK_RESULT(hipHostMalloc((void**) &interactionCounts, numContexts*sizeof(int2), 0), "Error creating interaction counts buffer");
+    CHECK_RESULT(hipHostMalloc((void**) &interactionCounts, numContexts*sizeof(int2), hipHostMallocNumaUser), "Error creating interaction counts buffer");
 }
 
 void HipParallelCalcForcesAndEnergyKernel::beginComputation(ContextImpl& context, bool includeForce, bool includeEnergy, int groups) {
@@ -209,8 +206,10 @@ void HipParallelCalcForcesAndEnergyKernel::beginComputation(ContextImpl& context
     ContextSelector selector(cu);
     if (!contextForces.isInitialized()) {
         contextForces.initialize<long long>(cu, 3*(data.contexts.size()-1)*cu.getPaddedNumAtoms(), "contextForces");
-        CHECK_RESULT(hipHostMalloc((void**) &pinnedForceBuffer, 3*(data.contexts.size()-1)*cu.getPaddedNumAtoms()*sizeof(long long), hipHostMallocPortable), "Error allocating pinned memory");
-        CHECK_RESULT(hipHostMalloc(&pinnedPositionBuffer, cu.getPaddedNumAtoms()*(cu.getUseDoublePrecision() ? sizeof(double4) : sizeof(float4)), hipHostMallocPortable), "Error allocating pinned memory");
+        if (!cu.getPlatformData().peerAccessSupported) {
+            CHECK_RESULT(hipHostMalloc((void**) &pinnedForceBuffer, 3*(data.contexts.size()-1)*cu.getPaddedNumAtoms()*sizeof(long long), hipHostMallocPortable), "Error allocating pinned memory");
+            CHECK_RESULT(hipHostMalloc(&pinnedPositionBuffer, cu.getPaddedNumAtoms()*(cu.getUseDoublePrecision() ? sizeof(double4) : sizeof(float4)), hipHostMallocPortable), "Error allocating pinned memory");
+        }
     }
 
     // Copy coordinates over to each device and execute the kernel.
