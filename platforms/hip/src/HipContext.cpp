@@ -144,17 +144,8 @@ HipContext::HipContext(const System& system, int deviceIndex, bool useBlockingSy
             CHECK_RESULT(hipDeviceGet(&device, trialDeviceIndex));
             // try setting device
             if (hipSetDevice(device) == hipSuccess) {
-                // and set flags
-                unsigned int flags = hipDeviceMapHost;
-                if (useBlockingSync)
-                    flags += hipDeviceScheduleBlockingSync;
-                else
-                    flags += hipDeviceScheduleSpin;
-
-                if (hipSetDeviceFlags(flags) == hipSuccess) {
-                    this->deviceIndex = trialDeviceIndex;
-                    break;
-                }
+                this->deviceIndex = trialDeviceIndex;
+                break;
             }
 
         }
@@ -932,7 +923,5 @@ vector<int> HipContext::getDevicePrecedence() {
 
 unsigned int HipContext::getEventFlags() {
     unsigned int flags = hipEventDisableTiming;
-    if (useBlockingSync)
-        flags += hipEventBlockingSync;
     return flags;
 }
