@@ -7,7 +7,7 @@
  * Medical Research, grant U54 GM072970. See https://simtk.org.               *
  *                                                                            *
  * Portions copyright (c) 2009-2022 Stanford University and the Authors.      *
- * Portions copyright (C) 2020-2022 Advanced Micro Devices, Inc. All Rights   *
+ * Portions copyright (C) 2020-2023 Advanced Micro Devices, Inc. All Rights   *
  * Reserved.                                                                  *
  * Authors: Peter Eastman, Nicholas Curtis                                    *
  * Contributors:                                                              *
@@ -73,7 +73,7 @@ HipNonbondedUtilities::HipNonbondedUtilities(HipContext& context) : context(cont
     int multiprocessors;
     CHECK_RESULT(hipDeviceGetAttribute(&multiprocessors, hipDeviceAttributeMultiprocessorCount, context.getDevice()));
     CHECK_RESULT(hipEventCreateWithFlags(&downloadCountEvent, context.getEventFlags()));
-    CHECK_RESULT(hipHostMalloc((void**) &pinnedCountBuffer, 2*sizeof(unsigned int), hipHostMallocPortable));
+    CHECK_RESULT(hipHostMalloc((void**) &pinnedCountBuffer, 2*sizeof(unsigned int), hipHostMallocNumaUser));
     if (context.getSIMDWidth() > 32) {
         numForceThreadBlocks = 4*5*multiprocessors;
         forceThreadBlockSize = 64;
@@ -387,6 +387,8 @@ void HipNonbondedUtilities::initialize(const System& system) {
         findInteractingBlocksArgs.push_back(&exclusionRowIndices.getDevicePointer());
         findInteractingBlocksArgs.push_back(&oldPositions.getDevicePointer());
         findInteractingBlocksArgs.push_back(&rebuildNeighborList.getDevicePointer());
+        copyInteractionCountsArgs.push_back(&interactionCount.getDevicePointer());
+        copyInteractionCountsArgs.push_back(&pinnedCountBuffer);
     }
 }
 
@@ -430,7 +432,7 @@ void HipNonbondedUtilities::prepareInteractions(int forceGroups) {
     context.executeKernelFlat(kernels.findInteractingBlocksKernel, &findInteractingBlocksArgs[0], context.getNumAtomBlocks() * context.getSIMDWidth() * numTilesInBatch, findInteractingBlocksThreadBlockSize);
     forceRebuildNeighborList = false;
     lastCutoff = kernels.cutoffDistance;
-    interactionCount.download(pinnedCountBuffer, false);
+    context.executeKernelFlat(kernels.copyInteractionCountsKernel, &copyInteractionCountsArgs[0], 1, 1);
     hipEventRecord(downloadCountEvent, context.getCurrentStream());
 }
 
@@ -565,6 +567,7 @@ void HipNonbondedUtilities::createKernelsForGroups(int groups) {
         kernels.findBlockBoundsKernel = context.getKernel(interactingBlocksProgram, "findBlockBounds");
         kernels.sortBoxDataKernel = context.getKernel(interactingBlocksProgram, "sortBoxData");
         kernels.findInteractingBlocksKernel = context.getKernel(interactingBlocksProgram, "findBlocksWithInteractions");
+        kernels.copyInteractionCountsKernel = context.getKernel(interactingBlocksProgram, "copyInteractionCounts");
     }
     groupKernels[groups] = kernels;
 }

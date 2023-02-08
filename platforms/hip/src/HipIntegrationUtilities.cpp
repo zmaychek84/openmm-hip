@@ -7,7 +7,7 @@
  * Medical Research, grant U54 GM072970. See https://simtk.org.               *
  *                                                                            *
  * Portions copyright (c) 2009-2021 Stanford University and the Authors.      *
- * Portions copyright (C) 2020-2021 Advanced Micro Devices, Inc. All Rights   *
+ * Portions copyright (C) 2020-2023 Advanced Micro Devices, Inc. All Rights   *
  * Reserved.                                                                  *
  * Authors: Peter Eastman, Nicholas Curtis                                    *
  * Contributors:                                                              *
@@ -44,7 +44,7 @@ using namespace std;
 HipIntegrationUtilities::HipIntegrationUtilities(HipContext& context, const System& system) : IntegrationUtilities(context, system),
         ccmaConvergedMemory(NULL) {
         CHECK_RESULT2(hipEventCreateWithFlags(&ccmaEvent, context.getEventFlags()), "Error creating event for CCMA");
-        CHECK_RESULT2(hipHostMalloc((void**) &ccmaConvergedMemory, sizeof(int), hipHostMallocMapped), "Error allocating pinned memory");
+        CHECK_RESULT2(hipHostMalloc((void**) &ccmaConvergedMemory, sizeof(int), hipHostMallocNumaUser), "Error allocating pinned memory");
         CHECK_RESULT2(hipHostGetDevicePointer(&ccmaConvergedDeviceMemory, ccmaConvergedMemory, 0), "Error getting device address for pinned memory");
 }
 
@@ -119,7 +119,7 @@ void HipIntegrationUtilities::applyConstraintsImpl(bool constrainVelocities, dou
                 ccmaForceKernel->setArg(8, i);
                 ccmaForceKernel->execute(ccmaConstraintAtoms.getSize());
                 if ((i+1)%checkInterval == 0)
-                    CHECK_RESULT2(hipEventRecord(ccmaEvent, 0), "Error recording event for CCMA");
+                    CHECK_RESULT2(hipEventRecord(ccmaEvent, dynamic_cast<HipContext&>(context).getCurrentStream()), "Error recording event for CCMA");
                 ccmaMultiplyKernel->setArg(5, i);
                 ccmaMultiplyKernel->execute(ccmaConstraintAtoms.getSize());
                 ccmaUpdateKernel->setArg(9, i);
