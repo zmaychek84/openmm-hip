@@ -6,8 +6,8 @@
  * Biological Structures at Stanford, funded under the NIH Roadmap for        *
  * Medical Research, grant U54 GM072970. See https://simtk.org.               *
  *                                                                            *
- * Portions copyright (c) 2009-2019 Stanford University and the Authors.      *
- * Portions copyright (C) 2020 Advanced Micro Devices, Inc. All Rights        *
+ * Portions copyright (c) 2009-2023 Stanford University and the Authors.      *
+ * Portions copyright (C) 2020-2023 Advanced Micro Devices, Inc. All Rights   *
  * Reserved.                                                                  *
  * Authors: Peter Eastman, Nicholas Curtis                                    *
  * Contributors:                                                              *
@@ -81,7 +81,7 @@ bool HipContext::hasInitializedHip = false;
 
 HipContext::HipContext(const System& system, int deviceIndex, bool useBlockingSync, const string& precision, const string& compiler,
         const string& tempDir, const std::string& hostCompiler, bool allowRuntimeCompiler, HipPlatform::PlatformData& platformData,
-        HipContext* originalContext) : ComputeContext(system), currentStream(0), platformData(platformData), contextIsValid(false), hasAssignedPosqCharges(false),
+        HipContext* originalContext) : ComputeContext(system), currentStream(0), defaultStream(0), platformData(platformData), contextIsValid(false), hasAssignedPosqCharges(false),
         hasCompilerKernel(false), isHipccAvailable(false), pinnedBuffer(NULL), integration(NULL), expression(NULL), bonded(NULL), nonbonded(NULL),
         useBlockingSync(useBlockingSync), fftBackend(0), supportsHardwareFloatGlobalAtomicAdd(false) {
     // Determine what compiler to use.
@@ -144,17 +144,8 @@ HipContext::HipContext(const System& system, int deviceIndex, bool useBlockingSy
             CHECK_RESULT(hipDeviceGet(&device, trialDeviceIndex));
             // try setting device
             if (hipSetDevice(device) == hipSuccess) {
-                // and set flags
-                unsigned int flags = hipDeviceMapHost;
-                if (useBlockingSync)
-                    flags += hipDeviceScheduleBlockingSync;
-                else
-                    flags += hipDeviceScheduleSpin;
-
-                if (hipSetDeviceFlags(flags) == hipSuccess) {
-                    this->deviceIndex = trialDeviceIndex;
-                    break;
-                }
+                this->deviceIndex = trialDeviceIndex;
+                break;
             }
 
         }
@@ -164,12 +155,15 @@ HipContext::HipContext(const System& system, int deviceIndex, bool useBlockingSy
             else
                 throw OpenMMException("No compatible HIP device is available");
         }
+        CHECK_RESULT(hipStreamCreateWithFlags(&defaultStream, hipStreamNonBlocking));
     }
     else {
         isLinkedContext = true;
         this->deviceIndex = originalContext->deviceIndex;
         this->device = originalContext->device;
+        defaultStream = originalContext->defaultStream;
     }
+    currentStream = defaultStream;
 
     hipDeviceProp_t props;
     CHECK_RESULT(hipGetDeviceProperties(&props, device));
@@ -386,6 +380,8 @@ HipContext::~HipContext() {
     for (auto module : loadedModules) {
         hipModuleUnload(module);
     }
+    if (!isLinkedContext)
+        hipStreamDestroy(defaultStream);
     popAsCurrent();
     contextIsValid = false;
 }
@@ -394,23 +390,25 @@ void HipContext::initialize() {
     ContextSelector selector(*this);
     string errorMessage = "Error initializing Context";
     int numEnergyBuffers = max(numThreadBlocks*ThreadBlockSize, nonbonded->getNumEnergyBuffers());
+    int multiprocessors;
+    CHECK_RESULT2(hipDeviceGetAttribute(&multiprocessors, hipDeviceAttributeMultiprocessorCount, device), "Error checking GPU properties");
     if (useDoublePrecision) {
         energyBuffer.initialize<double>(*this, numEnergyBuffers, "energyBuffer");
-        energySum.initialize<double>(*this, 1, "energySum");
+        energySum.initialize<double>(*this, multiprocessors, "energySum");
         int pinnedBufferSize = max(paddedNumAtoms*4, numEnergyBuffers);
-        CHECK_RESULT(hipHostMalloc(&pinnedBuffer, pinnedBufferSize*sizeof(double), 0));
+        CHECK_RESULT(hipHostMalloc(&pinnedBuffer, pinnedBufferSize*sizeof(double), hipHostMallocNumaUser));
     }
     else if (useMixedPrecision) {
         energyBuffer.initialize<double>(*this, numEnergyBuffers, "energyBuffer");
-        energySum.initialize<double>(*this, 1, "energySum");
+        energySum.initialize<double>(*this, multiprocessors, "energySum");
         int pinnedBufferSize = max(paddedNumAtoms*4, numEnergyBuffers);
-        CHECK_RESULT(hipHostMalloc(&pinnedBuffer, pinnedBufferSize*sizeof(double), 0));
+        CHECK_RESULT(hipHostMalloc(&pinnedBuffer, pinnedBufferSize*sizeof(double), hipHostMallocNumaUser));
     }
     else {
         energyBuffer.initialize<float>(*this, numEnergyBuffers, "energyBuffer");
-        energySum.initialize<float>(*this, 1, "energySum");
+        energySum.initialize<float>(*this, multiprocessors, "energySum");
         int pinnedBufferSize = max(paddedNumAtoms*6, numEnergyBuffers);
-        CHECK_RESULT(hipHostMalloc(&pinnedBuffer, pinnedBufferSize*sizeof(float), 0));
+        CHECK_RESULT(hipHostMalloc(&pinnedBuffer, pinnedBufferSize*sizeof(float), hipHostMallocNumaUser));
     }
     for (int i = 0; i < numAtoms; i++) {
         double mass = system.getParticleMass(i);
@@ -633,7 +631,7 @@ hipModule_t HipContext::createModule(const string source, const map<string, stri
         ofstream out(inputFile.c_str());
         out << src.str();
         out.close();
-        string command = compiler + " --genco --amdgpu-target=" + gpuArchitecture + " " + options + (saveTemps ? " -save-temps=obj" : "") +" -o \""+outputFile+"\" " + " \""+inputFile+"\" 2> \""+logFile+"\"";
+        string command = compiler + " --genco --offload-arch=" + gpuArchitecture + " " + options + (saveTemps ? " -save-temps=obj" : "") +" -o \""+outputFile+"\" " + " \""+inputFile+"\" 2> \""+logFile+"\"";
         res = std::system(command.c_str());
     }
     try {
@@ -698,7 +696,7 @@ void HipContext::setCurrentStream(hipStream_t stream) {
 }
 
 void HipContext::restoreDefaultStream() {
-    setCurrentStream(0);
+    currentStream = defaultStream;
 }
 
 HipArray* HipContext::createArray() {
@@ -859,12 +857,18 @@ double HipContext::reduceEnergy() {
     int bufferSize = energyBuffer.getSize();
     int workGroupSize = getMaxThreadBlockSize();
     void* args[] = {&energyBuffer.getDevicePointer(), &energySum.getDevicePointer(), &bufferSize, &workGroupSize};
-    executeKernel(reduceEnergyKernel, args, workGroupSize, workGroupSize, workGroupSize*energyBuffer.getElementSize());
+    executeKernel(reduceEnergyKernel, args, workGroupSize*energySum.getSize(), workGroupSize, workGroupSize*energyBuffer.getElementSize());
     energySum.download(pinnedBuffer);
-    if (getUseDoublePrecision() || getUseMixedPrecision())
-        return *((double*) pinnedBuffer);
-    else
-        return *((float*) pinnedBuffer);
+    double result = 0;
+    if (getUseDoublePrecision() || getUseMixedPrecision()) {
+        for (int i = 0; i < energySum.getSize(); i++)
+            result += ((double*) pinnedBuffer)[i];
+    }
+    else {
+        for (int i = 0; i < energySum.getSize(); i++)
+            result += ((float*) pinnedBuffer)[i];
+    }
+    return result;
 }
 
 void HipContext::setCharges(const vector<double>& charges) {
@@ -932,7 +936,5 @@ vector<int> HipContext::getDevicePrecedence() {
 
 unsigned int HipContext::getEventFlags() {
     unsigned int flags = hipEventDisableTiming;
-    if (useBlockingSync)
-        flags += hipEventBlockingSync;
     return flags;
 }
