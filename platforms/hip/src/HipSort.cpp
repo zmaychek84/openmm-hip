@@ -7,7 +7,7 @@
  * Medical Research, grant U54 GM072970. See https://simtk.org.               *
  *                                                                            *
  * Portions copyright (c) 2010-2018 Stanford University and the Authors.      *
- * Portions copyright (C) 2020 Advanced Micro Devices, Inc. All Rights        *
+ * Portions copyright (C) 2020-2023 Advanced Micro Devices, Inc. All Rights   *
  * Reserved.                                                                  *
  * Authors: Peter Eastman, Nicholas Curtis                                    *
  * Contributors:                                                              *
@@ -34,7 +34,8 @@
 using namespace OpenMM;
 using namespace std;
 
-HipSort::HipSort(HipContext& context, SortTrait* trait, unsigned int length) : context(context), trait(trait), dataLength(length) {
+HipSort::HipSort(HipContext& context, SortTrait* trait, unsigned int length, bool uniform) :
+        context(context), trait(trait), dataLength(length), uniform(uniform) {
     // Create kernels.
 
     map<string, string> replacements;
@@ -67,7 +68,7 @@ HipSort::HipSort(HipContext& context, SortTrait* trait, unsigned int length) : c
     rangeKernelBlocks = (length + rangeKernelSize - 1) / rangeKernelSize;
     if (sortKernelSize > maxLocalBuffer)
         sortKernelSize = maxLocalBuffer;
-    unsigned int targetBucketSize = sortKernelSize/2;
+    unsigned int targetBucketSize = uniform ? sortKernelSize/2 : sortKernelSize/8;
     unsigned int numBuckets = length/targetBucketSize;
     if (numBuckets < 1)
         numBuckets = 1;
@@ -138,7 +139,7 @@ void HipSort::sort(HipArray& data) {
 
         // Sort each bucket.
 
-        void* sortArgs[] = {&data.getDevicePointer(), &buckets.getDevicePointer(), &numBuckets, &bucketOffset.getDevicePointer()};
-        context.executeKernel(sortBucketsKernel, sortArgs, ((data.getSize()+sortKernelSize-1)/sortKernelSize)*sortKernelSize, sortKernelSize, sortKernelSize*trait->getDataSize());
+        void* sortArgs[] = {&data.getDevicePointer(), &buckets.getDevicePointer(), &bucketOffset.getDevicePointer()};
+        context.executeKernelFlat(sortBucketsKernel, sortArgs, numBuckets*sortKernelSize, sortKernelSize, sortKernelSize*trait->getDataSize());
     }
 }

@@ -204,76 +204,73 @@ __global__ void copyDataToBuckets(const DATA_TYPE* __restrict__ data, DATA_TYPE*
 /**
  * Sort the data in each bucket.
  */
-__global__ void sortBuckets(DATA_TYPE* __restrict__ data, const DATA_TYPE* __restrict__ buckets, unsigned int numBuckets, const unsigned int* __restrict__ bucketOffset) {
+__global__ void sortBuckets(DATA_TYPE* __restrict__ data, const DATA_TYPE* __restrict__ buckets, const unsigned int* __restrict__ bucketOffset) {
     extern __shared__ DATA_TYPE dataBuffer[];
-    for (unsigned int index = blockIdx.x; index < numBuckets; index += gridDim.x) {
-        unsigned int startIndex = (index == 0 ? 0 : bucketOffset[index-1]);
-        unsigned int endIndex = bucketOffset[index];
-        unsigned int length = endIndex-startIndex;
-        unsigned int lenghtNextPow2 = length <= 2 ? length : (1 << (32 - __clz(length - 1)));
-        if (length <= blockDim.x) {
-            // Load the data into local memory.
+    unsigned int index = blockIdx.x;
+    unsigned int startIndex = (index == 0 ? 0 : bucketOffset[index-1]);
+    unsigned int endIndex = bucketOffset[index];
+    unsigned int length = endIndex-startIndex;
+    unsigned int lenghtNextPow2 = length <= 2 ? length : (1 << (32 - __clz(length - 1)));
+    if (length <= blockDim.x) {
+        // Load the data into local memory.
 
-            if (threadIdx.x < length)
-                dataBuffer[threadIdx.x] = buckets[startIndex+threadIdx.x];
-            else
-                dataBuffer[threadIdx.x] = MAX_VALUE;
-            __syncthreads();
+        if (threadIdx.x < length)
+            dataBuffer[threadIdx.x] = buckets[startIndex+threadIdx.x];
+        else if (threadIdx.x < lenghtNextPow2)
+            dataBuffer[threadIdx.x] = MAX_VALUE;
+        __syncthreads();
 
-            // Perform a bitonic sort in local memory.
+        // Perform a bitonic sort in local memory.
 
-            for (unsigned int k = 2; k <= lenghtNextPow2; k *= 2) {
-                for (unsigned int j = k/2; j > 0; j /= 2) {
-                    int ixj = threadIdx.x^j;
-                    if (ixj > threadIdx.x) {
-                        DATA_TYPE value1 = dataBuffer[threadIdx.x];
-                        DATA_TYPE value2 = dataBuffer[ixj];
-                        bool ascending = (threadIdx.x&k) == 0;
-                        KEY_TYPE lowKey = (ascending ? getValue(value1) : getValue(value2));
+        for (unsigned int k = 2; k <= lenghtNextPow2; k *= 2) {
+            for (unsigned int j = k/2; j > 0; j /= 2) {
+                int ixj = threadIdx.x^j;
+                if (threadIdx.x < lenghtNextPow2 && ixj > threadIdx.x) {
+                    DATA_TYPE value1 = dataBuffer[threadIdx.x];
+                    DATA_TYPE value2 = dataBuffer[ixj];
+                    bool ascending = (threadIdx.x&k) == 0;
+                    KEY_TYPE lowKey = (ascending ? getValue(value1) : getValue(value2));
+                    KEY_TYPE highKey = (ascending ? getValue(value2) : getValue(value1));
+                    if (lowKey > highKey) {
+                        dataBuffer[threadIdx.x] = value2;
+                        dataBuffer[ixj] = value1;
+                    }
+                }
+                __syncthreads();
+            }
+        }
+
+        // Write the data to the sorted array.
+
+        if (threadIdx.x < length)
+            data[startIndex+threadIdx.x] = dataBuffer[threadIdx.x];
+    }
+    else {
+        // Copy the bucket data over to the output array.
+
+        for (unsigned int i = threadIdx.x; i < length; i += blockDim.x)
+            data[startIndex+i] = buckets[startIndex+i];
+        __syncthreads();
+
+        // Perform a bitonic sort in global memory.
+
+        for (unsigned int k = 2; k <= lenghtNextPow2; k *= 2) {
+            for (unsigned int j = k/2; j > 0; j /= 2) {
+                for (unsigned int i = threadIdx.x; i < length; i += blockDim.x) {
+                    int ixj = i^j;
+                    if (ixj > i && ixj < length) {
+                        DATA_TYPE value1 = data[startIndex+i];
+                        DATA_TYPE value2 = data[startIndex+ixj];
+                        bool ascending = (__popc(~i & (lenghtNextPow2 - k)) & 1) == 0;
+                        KEY_TYPE lowKey  = (ascending ? getValue(value1) : getValue(value2));
                         KEY_TYPE highKey = (ascending ? getValue(value2) : getValue(value1));
                         if (lowKey > highKey) {
-                            dataBuffer[threadIdx.x] = value2;
-                            dataBuffer[ixj] = value1;
+                            data[startIndex+i] = value2;
+                            data[startIndex+ixj] = value1;
                         }
                     }
-                    __syncthreads();
                 }
-            }
-
-            // Write the data to the sorted array.
-
-            if (threadIdx.x < length)
-                data[startIndex+threadIdx.x] = dataBuffer[threadIdx.x];
-        }
-        else {
-            // Copy the bucket data over to the output array.
-
-            for (unsigned int i = threadIdx.x; i < length; i += blockDim.x)
-                data[startIndex+i] = buckets[startIndex+i];
-            __threadfence_block();
-            __syncthreads();
-
-            // Perform a bitonic sort in global memory.
-
-            for (unsigned int k = 2; k <= lenghtNextPow2; k *= 2) {
-                for (unsigned int j = k/2; j > 0; j /= 2) {
-                    for (unsigned int i = threadIdx.x; i < length; i += blockDim.x) {
-                        int ixj = i^j;
-                        if (ixj > i && ixj < length) {
-                            DATA_TYPE value1 = data[startIndex+i];
-                            DATA_TYPE value2 = data[startIndex+ixj];
-                            bool ascending = (__popc(~i & (lenghtNextPow2 - k)) & 1) == 0;
-                            KEY_TYPE lowKey  = (ascending ? getValue(value1) : getValue(value2));
-                            KEY_TYPE highKey = (ascending ? getValue(value2) : getValue(value1));
-                            if (lowKey > highKey) {
-                                data[startIndex+i] = value2;
-                                data[startIndex+ixj] = value1;
-                            }
-                        }
-                    }
-                    __threadfence_block();
-                    __syncthreads();
-                }
+                __syncthreads();
             }
         }
     }
