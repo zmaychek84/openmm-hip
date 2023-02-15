@@ -7,7 +7,7 @@
  * Medical Research, grant U54 GM072970. See https://simtk.org.               *
  *                                                                            *
  * Portions copyright (c) 2011-2019 Stanford University and the Authors.      *
- * Portions copyright (C) 2020 Advanced Micro Devices, Inc. All Rights        *
+ * Portions copyright (C) 2020-2023 Advanced Micro Devices, Inc. All Rights   *
  * Reserved.                                                                  *
  * Authors: Peter Eastman, Nicholas Curtis                                    *
  * Contributors:                                                              *
@@ -112,6 +112,7 @@ void HipBondedUtilities::initialize(const System& system) {
 
     stringstream s;
     s<<HipKernelSources::vectorOps;
+    s<<HipKernelSources::bonded;
     for (int i = 0; i < (int) prefixCode.size(); i++)
         s<<prefixCode[i];
     s<<"extern \"C\" __global__ void computeBondedForces(unsigned long long* __restrict__ forceBuffer, mixed* __restrict__ energyBuffer, const real4* __restrict__ posq, int groups, real4 periodicBoxSize, real4 invPeriodicBoxSize, real4 periodicBoxVecX, real4 periodicBoxVecY, real4 periodicBoxVecZ";
@@ -168,10 +169,16 @@ string HipBondedUtilities::createForceSource(int forceIndex, int numBonds, int n
     }
     s<<computeForce<<"\n";
     for (int i = 0; i < numAtoms; i++) {
-        s<<"    atomicAdd(&forceBuffer[atom"<<(i+1)<<"], static_cast<unsigned long long>(realToFixedPoint(force"<<(i+1)<<".x)));\n";
-        s<<"    atomicAdd(&forceBuffer[atom"<<(i+1)<<"+PADDED_NUM_ATOMS], static_cast<unsigned long long>(realToFixedPoint(force"<<(i+1)<<".y)));\n";
-        s<<"    atomicAdd(&forceBuffer[atom"<<(i+1)<<"+PADDED_NUM_ATOMS*2], static_cast<unsigned long long>(realToFixedPoint(force"<<(i+1)<<".z)));\n";
-        s<<"    __threadfence_block();\n";
+        // Consecutive lanes write forces for the same atom quite often. Segmented reduction removes such conflicts.
+        s<<"    {\n";
+        s<<"        bool head;\n";
+        s<<"        force"<<(i+1)<<" = headSegmentedSum(force"<<(i+1)<<", atom"<<(i+1)<<", head);\n";
+        s<<"        if (head) {\n";
+        s<<"            atomicAdd(&forceBuffer[atom"<<(i+1)<<"], static_cast<unsigned long long>(realToFixedPoint(force"<<(i+1)<<".x)));\n";
+        s<<"            atomicAdd(&forceBuffer[atom"<<(i+1)<<"+PADDED_NUM_ATOMS], static_cast<unsigned long long>(realToFixedPoint(force"<<(i+1)<<".y)));\n";
+        s<<"            atomicAdd(&forceBuffer[atom"<<(i+1)<<"+PADDED_NUM_ATOMS*2], static_cast<unsigned long long>(realToFixedPoint(force"<<(i+1)<<".z)));\n";
+        s<<"        }\n";
+        s<<"    }\n";
     }
     s<<"}\n";
     return s.str();
