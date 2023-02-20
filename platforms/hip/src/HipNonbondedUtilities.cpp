@@ -70,22 +70,10 @@ HipNonbondedUtilities::HipNonbondedUtilities(HipContext& context) : context(cont
     // Decide how many thread blocks to use.
 
     string errorMessage = "Error initializing nonbonded utilities";
-    int multiprocessors;
-    CHECK_RESULT(hipDeviceGetAttribute(&multiprocessors, hipDeviceAttributeMultiprocessorCount, context.getDevice()));
     CHECK_RESULT(hipEventCreateWithFlags(&downloadCountEvent, context.getEventFlags()));
     CHECK_RESULT(hipHostMalloc((void**) &pinnedCountBuffer, 2*sizeof(unsigned int), hipHostMallocNumaUser));
-    if (context.getSIMDWidth() > 32) {
-        numForceThreadBlocks = 4*5*multiprocessors;
-        forceThreadBlockSize = 64;
-    }
-    else {
-        // Launch more warps on RDNA:
-        // 1. For RDNA GPUs hipDeviceAttributeMultiprocessorCount means WGP (work-group processors,
-        //    two compute units), not CUs.
-        // 2. Most systems benefit from higher occupancy.
-        numForceThreadBlocks = 4*5*multiprocessors;
-        forceThreadBlockSize = 256;
-    }
+    numForceThreadBlocks = 5*4*context.getMultiprocessors();
+    forceThreadBlockSize = 64;
     findInteractingBlocksThreadBlockSize = context.getSIMDWidth();
     setKernelSource(HipKernelSources::nonbonded);
 }
@@ -308,7 +296,7 @@ void HipNonbondedUtilities::initialize(const System& system) {
         sortedBlockBoundingBox.initialize(context, numAtomBlocks+1, 4*elementSize, "sortedBlockBoundingBox");
         oldPositions.initialize(context, numAtoms, 4*elementSize, "oldPositions");
         rebuildNeighborList.initialize<int>(context, 1, "rebuildNeighborList");
-        blockSorter = new HipSort(context, new BlockSortTrait(context.getUseDoublePrecision()), numAtomBlocks);
+        blockSorter = new HipSort(context, new BlockSortTrait(context.getUseDoublePrecision()), numAtomBlocks, false);
         vector<unsigned int> count(2, 0);
         interactionCount.upload(count);
         rebuildNeighborList.upload(&count[0]);
