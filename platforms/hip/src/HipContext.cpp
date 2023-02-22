@@ -214,7 +214,6 @@ HipContext::HipContext(const System& system, int deviceIndex, bool useBlockingSy
     compilationDefines["USE_HIP"] = "1";
     if (simdWidth == 32)
         compilationDefines["AMD_RDNA"] = "";
-    compilationDefines["ENABLE_SHUFFLE"] = "1";
     if (useDoublePrecision) {
         posq.initialize<double4>(*this, paddedNumAtoms, "posq");
         velm.initialize<double4>(*this, paddedNumAtoms, "velm");
