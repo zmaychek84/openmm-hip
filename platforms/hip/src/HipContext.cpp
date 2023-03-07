@@ -205,14 +205,15 @@ HipContext::HipContext(const System& system, int deviceIndex, bool useBlockingSy
     numAtoms = system.getNumParticles();
     paddedNumAtoms = TileSize*((numAtoms+TileSize-1)/TileSize);
     numAtomBlocks = (paddedNumAtoms+(TileSize-1))/TileSize;
-    int multiprocessors;
     CHECK_RESULT(hipDeviceGetAttribute(&multiprocessors, hipDeviceAttributeMultiprocessorCount, device));
+    // For RDNA GPUs hipDeviceAttributeMultiprocessorCount means WGP (work-group processors, two compute units), not CUs.
+    if (simdWidth == 32)
+        multiprocessors *= 2;
     numThreadBlocks = numThreadBlocksPerComputeUnit*multiprocessors;
 
     compilationDefines["USE_HIP"] = "1";
     if (simdWidth == 32)
         compilationDefines["AMD_RDNA"] = "";
-    compilationDefines["ENABLE_SHUFFLE"] = "1";
     if (useDoublePrecision) {
         posq.initialize<double4>(*this, paddedNumAtoms, "posq");
         velm.initialize<double4>(*this, paddedNumAtoms, "velm");
@@ -390,8 +391,6 @@ void HipContext::initialize() {
     ContextSelector selector(*this);
     string errorMessage = "Error initializing Context";
     int numEnergyBuffers = max(numThreadBlocks*ThreadBlockSize, nonbonded->getNumEnergyBuffers());
-    int multiprocessors;
-    CHECK_RESULT2(hipDeviceGetAttribute(&multiprocessors, hipDeviceAttributeMultiprocessorCount, device), "Error checking GPU properties");
     if (useDoublePrecision) {
         energyBuffer.initialize<double>(*this, numEnergyBuffers, "energyBuffer");
         energySum.initialize<double>(*this, multiprocessors, "energySum");

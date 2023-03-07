@@ -404,6 +404,12 @@ public:
         return simdWidth;
     }
     /**
+     * Get the number of multiprocessors (compute units) of the device being used.
+     */
+    int getMultiprocessors() const {
+        return multiprocessors;
+    }
+    /**
      * Get whether the device being used supports 64 bit atomic operations on global memory.
      */
     bool getSupports64BitGlobalAtomics() const {
@@ -606,6 +612,7 @@ private:
     int numAtomBlocks;
     int numThreadBlocks;
     int simdWidth;
+    int multiprocessors;
     int sharedMemPerBlock;
     bool supportsHardwareFloatGlobalAtomicAdd;
     bool useBlockingSync, useDoublePrecision, useMixedPrecision, contextIsValid, boxIsTriclinic, hasCompilerKernel, isHipccAvailable, hasAssignedPosqCharges;
